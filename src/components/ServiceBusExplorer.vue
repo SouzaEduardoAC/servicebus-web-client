@@ -13,9 +13,12 @@
             <tr>
               <th>Name</th>
               <th>Status</th>
-              <th>Active Messages</th>
-              <th>Dead-lettered Messages</th>
-              <th>Size (MB)</th>
+              <th title="Active Messages">Active</th>
+              <th title="Dead-lettered Messages">Dead-letter</th>
+              <th title="Scheduled Messages">Scheduled</th>
+              <th title="Transfer Messages">Transfer</th>
+              <th title="Transfer Dead-lettered Messages">Transfer DLQ</th>
+              <th title="Size in Bytes">Size (MB)</th>
             </tr>
           </thead>
           <tbody>
@@ -24,7 +27,10 @@
               <td>{{ queue.status }}</td>
               <td>{{ queue.activeMessageCount.toLocaleString() }}</td>
               <td>{{ queue.deadLetterMessageCount.toLocaleString() }}</td>
-              <td>{{ (queue.sizeInBytes / 1024 / 1024).toFixed(2) }}</td>
+              <td>{{ queue.scheduledMessageCount.toLocaleString() }}</td>
+              <td>{{ queue.transferMessageCount.toLocaleString() }}</td>
+              <td>{{ queue.transferDeadLetterMessageCount.toLocaleString() }}</td>
+              <td>{{ (queue.sizeInBytes / 1024 / 1024).toFixed(3) }}</td>
             </tr>
           </tbody>
         </table>
@@ -37,7 +43,9 @@
           <div v-for="topic in topics" :key="topic.name" class="topic-container">
             <h3>Topic: {{ topic.name }}</h3>
             <p>
-              Status: {{ topic.status }} | Size: {{ (topic.sizeInBytes / 1024 / 1024).toFixed(2) }} MB
+              Status: {{ topic.status }} | Size:
+              {{ (topic.sizeInBytes / 1024 / 1024).toFixed(3) }} MB | Scheduled:
+              {{ topic.scheduledMessageCount.toLocaleString() }}
             </p>
             <h4>Subscriptions ({{ topic.subscriptions.length }})</h4>
             <table v-if="topic.subscriptions.length">
@@ -45,8 +53,10 @@
                 <tr>
                   <th>Subscription Name</th>
                   <th>Status</th>
-                  <th>Active Messages</th>
-                  <th>Dead-lettered Messages</th>
+                  <th title="Active Messages">Active</th>
+                  <th title="Dead-lettered Messages">Dead-letter</th>
+                  <th title="Transfer Messages">Transfer</th>
+                  <th title="Transfer Dead-lettered Messages">Transfer DLQ</th>
                 </tr>
               </thead>
               <tbody>
@@ -55,6 +65,8 @@
                   <td>{{ sub.status }}</td>
                   <td>{{ sub.activeMessageCount.toLocaleString() }}</td>
                   <td>{{ sub.deadLetterMessageCount.toLocaleString() }}</td>
+                  <td>{{ sub.transferMessageCount.toLocaleString() }}</td>
+                  <td>{{ sub.transferDeadLetterMessageCount.toLocaleString() }}</td>
                 </tr>
               </tbody>
             </table>
@@ -75,12 +87,15 @@ interface Subscription {
   status: string;
   activeMessageCount: number;
   deadLetterMessageCount: number;
+  transferMessageCount: number;
+  transferDeadLetterMessageCount: number;
 }
 
 interface Topic {
   name: string;
   status: string;
   sizeInBytes: number;
+  scheduledMessageCount: number;
   subscriptions: Subscription[];
 }
 
@@ -89,6 +104,9 @@ interface Queue {
   status: string;
   activeMessageCount: number;
   deadLetterMessageCount: number;
+  scheduledMessageCount: number;
+  transferMessageCount: number;
+  transferDeadLetterMessageCount: number;
   sizeInBytes: number;
 }
 
@@ -140,6 +158,10 @@ td {
   border: 1px solid #ddd;
   padding: 8px;
   text-align: left;
+  white-space: nowrap;
+}
+th[title] {
+  cursor: help;
 }
 th {
   background-color: #f2f2f2;
@@ -165,4 +187,3 @@ tr:nth-child(even) {
   border-radius: 5px;
 }
 </style>
-
