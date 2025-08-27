@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { ServiceBusAdministrationClient } from '@azure/service-bus';
+import { ServiceBusAdministrationClient, ServiceBusClient } from '@azure/service-bus';
 import 'dotenv/config';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -15,7 +15,7 @@ app.use(cors());
 app.use(express.json());
 
 const connectionString = process.env.SERVICEBUS_CONNECTION_STRING_MANAGE;
-
+console.log(connectionString);
 if (!connectionString) {
   throw new Error(
     "SERVICEBUS_CONNECTION_STRING_MANAGE environment variable not set. It requires 'Manage' permissions."
@@ -23,47 +23,177 @@ if (!connectionString) {
 }
 
 const adminClient = new ServiceBusAdministrationClient(connectionString);
+const sbClient = new ServiceBusClient(connectionString);
 
 // Serve static files from the Vue app build directory
 app.use(express.static(path.join(__dirname, 'dist')));
 
-app.get('/api/entities', async (req, res) => {
-  console.log('Received request to fetch Service Bus entities...');
+app.get('/api/queues', async (req, res) => {
+  console.log('Received request to fetch queues...');
   try {
-    // Queues
+    const skip = parseInt(req.query.skip, 10) || 0;
+    const top = parseInt(req.query.top, 10) || 25;
+    const nameFilter = (req.query.nameFilter || '').toLowerCase();
+
+    let allQueueProps = [];
     const queueIterator = adminClient.listQueues();
-    const queues = [];
     for await (const queueProps of queueIterator) {
-      const runtimeProps = await adminClient.getQueueRuntimeProperties(queueProps.name);
-      queues.push({ ...queueProps, ...runtimeProps });
+      allQueueProps.push(queueProps);
     }
-    console.log(`Found ${queues.length} queues.`);
 
-    // Topics
-    const topicIterator = adminClient.listTopics();
-    const topics = [];
-    for await (const topicProps of topicIterator) {
-      const topicRuntimeProps = await adminClient.getTopicRuntimeProperties(topicProps.name);
-
-      // Subscriptions
-      const subscriptionIterator = adminClient.listSubscriptions(topicProps.name);
-      const subscriptions = [];
-      for await (const subProps of subscriptionIterator) {
-        const subRuntimeProps = await adminClient.getSubscriptionRuntimeProperties(
-          topicProps.name,
-          subProps.subscriptionName
-        );
-        subscriptions.push({ ...subProps, ...subRuntimeProps });
-      }
-      topics.push({ ...topicProps, ...topicRuntimeProps, subscriptions });
-      console.log(`Found topic '${topicProps.name}' with ${subscriptions.length} subscriptions.`);
+    if (nameFilter) {
+      allQueueProps = allQueueProps.filter((q) => q.name.toLowerCase().includes(nameFilter));
     }
-    console.log(`Found ${topics.length} topics.`);
 
-    res.json({ queues, topics });
+    const total = allQueueProps.length;
+    const pagedQueueProps = allQueueProps.slice(skip, skip + top);
+
+    const items = await Promise.all(
+      pagedQueueProps.map(async (queueProps) => {
+        const runtimeProps = await adminClient.getQueueRuntimeProperties(queueProps.name);
+        return { ...queueProps, ...runtimeProps };
+      })
+    );
+
+    console.log(`Returning ${items.length} of ${total} queues.`);
+    res.json({ items, total });
   } catch (err) {
-    console.error('Error fetching Service Bus entities:', err);
-    res.status(500).json({ error: 'Failed to fetch Service Bus entities.', message: err.message });
+    console.error('Error fetching queues:', err);
+    res.status(500).json({ error: 'Failed to fetch queues.', message: err.message });
+  }
+});
+
+app.get('/api/subscriptions', async (req, res) => {
+  console.log('Received request to fetch subscriptions...');
+  try {
+    const skip = parseInt(req.query.skip, 10) || 0;
+    const top = parseInt(req.query.top, 10) || 25;
+    const nameFilter = (req.query.nameFilter || '').toLowerCase();
+
+    let allSubscriptionsInfo = [];
+    const topicIterator = adminClient.listTopics();
+    for await (const topicProps of topicIterator) {
+      const subscriptionIterator = adminClient.listSubscriptions(topicProps.name);
+      for await (const subProps of subscriptionIterator) {
+        allSubscriptionsInfo.push({ ...subProps, topicName: topicProps.name });
+      }
+    }
+
+    if (nameFilter) {
+      allSubscriptionsInfo = allSubscriptionsInfo.filter(
+        (s) =>
+          s.topicName.toLowerCase().includes(nameFilter) ||
+          s.subscriptionName.toLowerCase().includes(nameFilter)
+      );
+    }
+
+    const total = allSubscriptionsInfo.length;
+    const pagedSubscriptionsInfo = allSubscriptionsInfo.slice(skip, skip + top);
+
+    const items = await Promise.all(
+      pagedSubscriptionsInfo.map(async (subInfo) => {
+        const subRuntimeProps = await adminClient.getSubscriptionRuntimeProperties(
+          subInfo.topicName,
+          subInfo.subscriptionName
+        );
+        return {
+          topicName: subInfo.topicName,
+          subscriptionName: subInfo.subscriptionName,
+          status: subRuntimeProps.status,
+          activeMessageCount: subRuntimeProps.activeMessageCount,
+          deadLetterMessageCount: subRuntimeProps.deadLetterMessageCount,
+          transferMessageCount: subRuntimeProps.transferMessageCount,
+          transferDeadLetterMessageCount: subRuntimeProps.transferDeadLetterMessageCount,
+        };
+      })
+    );
+
+    console.log(`Returning ${items.length} of ${total} subscriptions.`);
+    res.json({ items, total });
+  } catch (err) {
+    console.error('Error fetching subscriptions:', err);
+    res.status(500).json({ error: 'Failed to fetch subscriptions.', message: err.message });
+  }
+});
+
+app.post('/api/subscriptions/purge-active', async (req, res) => {
+  const { topicName, subscriptionName } = req.body;
+  console.log(`Purging active messages for ${topicName}/${subscriptionName}`);
+  try {
+    const receiver = sbClient.createReceiver(topicName, subscriptionName, {
+      receiveMode: 'receiveAndDelete',
+    });
+    let count = 0;
+    while (true) {
+      // Purge in batches of 100, with a 2-second timeout if no messages are available.
+      const messages = await receiver.receiveMessages(100, { maxWaitTimeInMs: 2000 });
+      if (messages.length === 0) {
+        break;
+      }
+      count += messages.length;
+      console.log(`Purged ${messages.length} messages...`);
+    }
+    await receiver.close();
+    console.log(`Total purged active messages: ${count}`);
+    res.json({ message: `Successfully purged ${count} active messages.` });
+  } catch (err) {
+    console.error('Error purging active messages:', err);
+    res.status(500).json({ error: 'Failed to purge active messages.', message: err.message });
+  }
+});
+
+app.post('/api/subscriptions/purge-dlq', async (req, res) => {
+  const { topicName, subscriptionName } = req.body;
+  console.log(`Purging DLQ messages for ${topicName}/${subscriptionName}`);
+  try {
+    const receiver = sbClient.createReceiver(topicName, subscriptionName, {
+      subQueueType: 'deadLetter',
+      receiveMode: 'receiveAndDelete',
+    });
+    let count = 0;
+    while (true) {
+      const messages = await receiver.receiveMessages(100, { maxWaitTimeInMs: 2000 });
+      if (messages.length === 0) {
+        break;
+      }
+      count += messages.length;
+      console.log(`Purged ${messages.length} DLQ messages...`);
+    }
+    await receiver.close();
+    console.log(`Total purged DLQ messages: ${count}`);
+    res.json({ message: `Successfully purged ${count} DLQ messages.` });
+  } catch (err) {
+    console.error('Error purging DLQ messages:', err);
+    res.status(500).json({ error: 'Failed to purge DLQ messages.', message: err.message });
+  }
+});
+
+app.post('/api/subscriptions/status', async (req, res) => {
+  const { topicName, subscriptionName, status } = req.body;
+  if (status !== 'Active' && status !== 'Disabled') {
+    return res.status(400).json({ error: 'Invalid status.' });
+  }
+  console.log(`Setting status to ${status} for subscription ${topicName}/${subscriptionName}`);
+  try {
+    const sub = await adminClient.getSubscription(topicName, subscriptionName);
+    sub.status = status;
+    await adminClient.updateSubscription(sub);
+    res.json({ message: `Subscription status updated to ${status}.` });
+  } catch (err) {
+    console.error(`Error updating subscription status:`, err);
+    res.status(500).json({ error: 'Failed to update subscription status.', message: err.message });
+  }
+});
+
+app.delete('/api/subscriptions/delete', async (req, res) => {
+  const { topicName, subscriptionName } = req.body;
+  console.log(`Deleting subscription ${topicName}/${subscriptionName}`);
+  try {
+    await adminClient.deleteSubscription(topicName, subscriptionName);
+    res.json({ message: 'Subscription deleted successfully.' });
+  } catch (err) {
+    console.error('Error deleting subscription:', err);
+    res.status(500).json({ error: 'Failed to delete subscription.', message: err.message });
   }
 });
 
