@@ -1,114 +1,99 @@
 <template>
-  <div class="explorer">
-    <h1>Azure Service Bus Explorer</h1>
- 
-    <div v-if="loading" class="loading">Loading entities...</div>
-    <div v-if="error" class="error">{{ error }}</div>
- 
-    <div v-if="!loading && !error">
-      <div class="filters">
-        <div class="filter-group">
-          <label>
-            <input type="radio" v-model="entityTypeFilter" value="topics" />
-            Topics
-          </label>
-          <label>
-            <input type="radio" v-model="entityTypeFilter" value="queues" />
-            Queues
-          </label>
+  <v-container fluid>
+    <v-row>
+      <v-col cols="12">
+        <div class="d-flex align-center">
+          <v-radio-group v-model="entityTypeFilter" inline class="mr-4">
+            <v-radio label="Topics & Subscriptions" value="topics"></v-radio>
+            <v-radio label="Queues" value="queues"></v-radio>
+          </v-radio-group>
+          <v-text-field
+            v-model="nameFilter"
+            label="Filter by name..."
+            dense
+            clearable
+            hide-details
+            class="flex-grow-1"
+          ></v-text-field>
         </div>
-        <div class="filter-group">
-          <input type="text" v-model="nameFilter" placeholder="Filter by name..." class="filter-input" />
-        </div>
-      </div>
- 
-      <section v-if="entityTypeFilter === 'queues'">
-        <h2>Queues ({{ totalQueues.toLocaleString() }})</h2>
-        <table v-if="queues.length">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th title="Active Messages">Active</th>
-              <th title="Dead-lettered Messages">Dead-letter</th>
-              <th title="Scheduled Messages">Scheduled</th>
-              <th title="Transfer Messages">Transfer</th>
-              <th title="Transfer Dead-lettered Messages">Transfer DLQ</th>
-              <th title="Size in Bytes">Size (MB)</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="queue in queues" :key="queue.name">
-              <td>{{ queue.name }}</td>
-              <td>{{ queue.status }}</td>
-              <td>{{ queue.activeMessageCount.toLocaleString() }}</td>
-              <td>{{ queue.deadLetterMessageCount.toLocaleString() }}</td>
-              <td>{{ queue.scheduledMessageCount.toLocaleString() }}</td>
-              <td>{{ queue.transferMessageCount.toLocaleString() }}</td>
-              <td>{{ queue.transferDeadLetterMessageCount.toLocaleString() }}</td>
-              <td>{{ (queue.sizeInBytes / 1024 / 1024).toFixed(3) }}</td>
-            </tr>
-          </tbody>
-        </table>
-        <div v-if="totalPages > 1" class="pagination">
-          <button @click="prevPage" :disabled="currentPage === 1">Previous</button>
-          <span>Page {{ currentPage }} of {{ totalPages }}</span>
-          <button @click="nextPage" :disabled="currentPage === totalPages">Next</button>
-        </div>
-        <p v-else>No queues found.</p>
-      </section>
- 
-      <section v-if="entityTypeFilter === 'topics'">
-        <h2>Topics & Subscriptions ({{ totalSubscriptions.toLocaleString() }})</h2>
-        <table v-if="subscriptions.length">
-          <thead>
-            <tr>
-              <th>Topic Name</th>
-              <th>Subscription</th>
-              <th>Status</th>
-              <th title="Active Messages">Active</th>
-              <th title="Dead-lettered Messages">DLQ</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="sub in subscriptions" :key="`${sub.topicName}-${sub.subscriptionName}`">
-              <td>{{ sub.topicName }}</td>
-              <td>{{ sub.subscriptionName }}</td>
-              <td>{{ sub.status }}</td>
-              <td>{{ sub.activeMessageCount.toLocaleString() }}</td>
-              <td>{{ sub.deadLetterMessageCount.toLocaleString() }}</td>
-              <td class="actions-cell">
-                <button @click="purgeActive(sub)" title="Purge Active Messages" :disabled="sub.activeMessageCount === 0">
-                  Purge Active
-                </button>
-                <button @click="purgeDlq(sub)" title="Purge Dead-lettered Messages" :disabled="sub.deadLetterMessageCount === 0">
-                  Purge DLQ
-                </button>
-                <button @click="toggleSubscriptionStatus(sub)" :title="sub.status === 'Active' ? 'Disable Subscription' : 'Enable Subscription'">
-                  {{ sub.status === 'Active' ? 'Disable' : 'Enable' }}
-                </button>
-                <button @click="deleteSubscription(sub)" title="Delete Subscription" class="danger">
-                  Delete
-                </button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div v-if="totalPages > 1" class="pagination">
-          <button @click="prevPage" :disabled="currentPage === 1">Previous</button>
-          <span>Page {{ currentPage }} of {{ totalPages }}</span>
-          <button @click="nextPage" :disabled="currentPage === totalPages">Next</button>
-        </div>
-        <p v-else-if="!subscriptions.length">No topics or subscriptions found.</p>
-      </section>
-    </div>
-  </div>
+      </v-col>
+    </v-row>
+
+    <v-row>
+      <v-col cols="12">
+        <v-alert v-if="error" type="error" :text="error" class="mb-4"></v-alert>
+
+        <v-card v-if="entityTypeFilter === 'queues'">
+          <v-card-title>Queues ({{ totalQueues.toLocaleString() }})</v-card-title>
+          <v-data-table-server
+            :headers="queueHeaders"
+            :items="queues"
+            :items-length="totalQueues"
+            :loading="loading"
+            v-model:page="currentPage"
+            v-model:items-per-page="pageSize"
+            @update:options="fetchData"
+            class="elevation-1"
+          >
+            <template v-slot:item.sizeInBytes="{ item }">
+              {{ (item.sizeInBytes / 1024 / 1024).toFixed(3) }} MB
+            </template>
+          </v-data-table-server>
+        </v-card>
+
+        <v-card v-if="entityTypeFilter === 'topics'">
+          <v-card-title>Topics & Subscriptions ({{ totalSubscriptions.toLocaleString() }})</v-card-title>
+          <v-data-table-server
+            :headers="subscriptionHeaders"
+            :items="subscriptions"
+            :items-length="totalSubscriptions"
+            :loading="loading"
+            v-model:page="currentPage"
+            v-model:items-per-page="pageSize"
+            @update:options="fetchData"
+            class="elevation-1"
+          >
+            <template v-slot:item.actions="{ item }">
+              <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props" icon="mdi-fire" size="small" @click="purgeActive(item)" :disabled="item.activeMessageCount === 0" class="mr-2">
+                  </v-btn>
+                </template>
+                <span>Purge Active Messages</span>
+              </v-tooltip>
+              <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props" icon="mdi-delete-sweep" size="small" @click="purgeDlq(item)" :disabled="item.deadLetterMessageCount === 0" class="mr-2">
+                  </v-btn>
+                </template>
+                <span>Purge Dead-lettered Messages</span>
+              </v-tooltip>
+               <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props" :icon="item.status === 'Active' ? 'mdi-pause-circle' : 'mdi-play-circle'" size="small" @click="toggleSubscriptionStatus(item)" class="mr-2">
+                  </v-btn>
+                </template>
+                <span>{{ item.status === 'Active' ? 'Disable Subscription' : 'Enable Subscription' }}</span>
+              </v-tooltip>
+              <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props" icon="mdi-delete-forever" size="small" color="error" @click="deleteSubscription(item)">
+                  </v-btn>
+                </template>
+                <span>Delete Subscription</span>
+              </v-tooltip>
+            </template>
+          </v-data-table-server>
+        </v-card>
+      </v-col>
+    </v-row>
+  </v-container>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 
+// Interfaces
 interface Subscription {
   subscriptionName: string;
   topicName: string;
@@ -117,14 +102,6 @@ interface Subscription {
   deadLetterMessageCount: number;
   transferMessageCount: number;
   transferDeadLetterMessageCount: number;
-}
-
-interface Topic {
-  name: string;
-  status: string;
-  sizeInBytes: number;
-  scheduledMessageCount: number;
-  subscriptions: Subscription[];
 }
 
 interface Queue {
@@ -138,6 +115,7 @@ interface Queue {
   sizeInBytes: number;
 }
 
+// Refs
 const queues = ref<Queue[]>([]);
 const totalQueues = ref(0);
 const subscriptions = ref<(Subscription & { topicName: string })[]>([]);
@@ -147,46 +125,69 @@ const error = ref<string | null>(null);
 const entityTypeFilter = ref<'topics' | 'queues'>('topics');
 const nameFilter = ref('');
 const currentPage = ref(1);
-const pageSize = ref(25);
+const pageSize = ref(10); // Default items per page
 
-const totalPages = computed(() => {
-  if (entityTypeFilter.value === 'queues') {
-    return Math.ceil(totalQueues.value / pageSize.value);
-  }
-  return Math.ceil(totalSubscriptions.value / pageSize.value);
-});
+// Headers
+const queueHeaders: any = [
+  { title: 'Name', key: 'name', sortable: true },
+  { title: 'Status', key: 'status', sortable: true },
+  { title: 'Active', key: 'activeMessageCount', sortable: true },
+  { title: 'Dead-letter', key: 'deadLetterMessageCount', sortable: true },
+  { title: 'Scheduled', key: 'scheduledMessageCount', sortable: true },
+  { title: 'Transfer', key: 'transferMessageCount', sortable: true },
+  { title: 'Transfer DLQ', key: 'transferDeadLetterMessageCount', sortable: true },
+  { title: 'Size', key: 'sizeInBytes', sortable: true },
+];
 
-async function fetchData() {
+const subscriptionHeaders: any = [
+  { title: 'Topic', key: 'topicName', sortable: true },
+  { title: 'Subscription', key: 'subscriptionName', sortable: true },
+  { title: 'Status', key: 'status', sortable: true },
+  { title: 'Active', key: 'activeMessageCount', sortable: true },
+  { title: 'DLQ', key: 'deadLetterMessageCount', sortable: true },
+  { title: 'Actions', key: 'actions', sortable: false, align: 'end'  },
+];
+
+// Methods
+async function fetchData({ page, itemsPerPage, sortBy }: { page: any, itemsPerPage: any, sortBy: any }) {
   try {
     loading.value = true;
     error.value = null;
-    const skip = (currentPage.value - 1) * pageSize.value;
+
+    // Update local pagination refs
+    currentPage.value = page;
+    pageSize.value = itemsPerPage;
+
+    const skip = (page - 1) * itemsPerPage;
     const params = new URLSearchParams({
       skip: skip.toString(),
-      top: pageSize.value.toString(),
+      top: itemsPerPage.toString(),
       nameFilter: nameFilter.value,
     });
 
+    if (sortBy && sortBy.length > 0) {
+      params.append('orderBy', sortBy[0].key);
+      params.append('order', sortBy[0].order === 'desc' ? 'DESC' : 'ASC');
+    }
+
+    const endpoint = entityTypeFilter.value === 'queues' ? '/api/queues' : '/api/subscriptions';
+    const response = await fetch(`${endpoint}?${params.toString()}`);
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+
     if (entityTypeFilter.value === 'queues') {
-      const response = await fetch(`/api/queues?${params.toString()}`);
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-      }
-      const data = await response.json();
       queues.value = data.items;
       totalQueues.value = data.total;
     } else {
-      // topics -> subscriptions
-      const response = await fetch(`/api/subscriptions?${params.toString()}`);
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-      }
-      const data = await response.json();
       subscriptions.value = data.items;
       totalSubscriptions.value = data.total;
     }
+
   } catch (e: any) {
     console.error('Failed to fetch entities:', e);
     error.value = `Failed to fetch data: ${e.message}`;
@@ -195,32 +196,21 @@ async function fetchData() {
   }
 }
 
-function nextPage() {
-  if (currentPage.value < totalPages.value) {
-    currentPage.value++;
-    fetchData();
-  }
-}
-
-function prevPage() {
-  if (currentPage.value > 1) {
-    currentPage.value--;
-    fetchData();
-  }
-}
-
-onMounted(() => {
-  fetchData();
-});
-
 watch([entityTypeFilter, nameFilter], () => {
   currentPage.value = 1;
-  fetchData();
+  // Manually trigger fetchData as options won't have changed if only filters are modified
+  fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
 });
 
+onMounted(() => {
+  fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
+});
+
+// Action Methods (with confirmation dialogs)
 async function purgeActive(sub: Subscription) {
   if (!confirm(`Are you sure you want to purge active messages from ${sub.topicName}/${sub.subscriptionName}? This may take a while and cannot be undone.`)) return;
-  try {
+  // ... (rest of the logic is the same)
+   try {
     const response = await fetch('/api/subscriptions/purge-active', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -232,7 +222,7 @@ async function purgeActive(sub: Subscription) {
     }
     const result = await response.json();
     alert(result.message);
-    fetchData();
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
   } catch (e: any) {
     error.value = `Failed to purge active messages: ${e.message}`;
   }
@@ -240,6 +230,7 @@ async function purgeActive(sub: Subscription) {
 
 async function purgeDlq(sub: Subscription) {
   if (!confirm(`Are you sure you want to purge dead-letter messages from ${sub.topicName}/${sub.subscriptionName}? This may take a while and cannot be undone.`)) return;
+  // ... (rest of the logic is the same)
   try {
     const response = await fetch('/api/subscriptions/purge-dlq', {
       method: 'POST',
@@ -252,7 +243,7 @@ async function purgeDlq(sub: Subscription) {
     }
     const result = await response.json();
     alert(result.message);
-    fetchData();
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
   } catch (e: any) {
     error.value = `Failed to purge DLQ messages: ${e.message}`;
   }
@@ -262,6 +253,7 @@ async function toggleSubscriptionStatus(sub: Subscription) {
   const newStatus = sub.status === 'Active' ? 'Disabled' : 'Active';
   const action = newStatus === 'Disabled' ? 'disable' : 'enable';
   if (!confirm(`Are you sure you want to ${action} subscription ${sub.topicName}/${sub.subscriptionName}?`)) return;
+  // ... (rest of the logic is the same)
   try {
     const response = await fetch(`/api/subscriptions/status`, {
       method: 'POST',
@@ -274,7 +266,7 @@ async function toggleSubscriptionStatus(sub: Subscription) {
     }
     const result = await response.json();
     alert(result.message);
-    fetchData();
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
   } catch (e: any) {
     error.value = `Failed to ${action} subscription: ${e.message}`;
   }
@@ -282,6 +274,7 @@ async function toggleSubscriptionStatus(sub: Subscription) {
 
 async function deleteSubscription(sub: Subscription) {
   if (!confirm(`Are you sure you want to DELETE subscription ${sub.topicName}/${sub.subscriptionName}? This action cannot be undone.`)) return;
+  // ... (rest of the logic is the same)
   try {
     const response = await fetch('/api/subscriptions/delete', {
       method: 'DELETE',
@@ -294,111 +287,17 @@ async function deleteSubscription(sub: Subscription) {
     }
     const result = await response.json();
     alert(result.message);
-    fetchData();
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
   } catch (e: any) {
     error.value = `Failed to delete subscription: ${e.message}`;
   }
 }
+
 </script>
 
 <style scoped>
-.explorer {
-  font-family: sans-serif;
-  padding: 1rem;
-}
-.filters {
-  display: flex;
-  gap: 2rem;
-  margin-bottom: 1.5rem;
-  align-items: center;
-}
-.filter-group {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-}
-.filter-input {
-  padding: 0.5rem;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-}
-label {
-  cursor: pointer;
-}
-.actions-cell {
-  white-space: nowrap;
-}
-.actions-cell button {
-  margin-right: 5px;
-  padding: 4px 8px;
-  font-size: 0.8rem;
-  cursor: pointer;
-  border: 1px solid #ccc;
-  border-radius: 3px;
-  background-color: #f0f0f0;
-}
-.actions-cell button:hover:not(:disabled) {
-  background-color: #e0e0e0;
-}
-.actions-cell button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.pagination {
-  margin-top: 1rem;
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}
-.pagination button {
-  padding: 0.5rem 1rem;
-  cursor: pointer;
-}
-.pagination button:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-.actions-cell button.danger {
-  background-color: #f44336;
-  color: white;
-  border-color: #f44336;
-}
-.actions-cell button.danger:hover:not(:disabled) {
-  background-color: #d32f2f;
-}
-section {
-  margin-bottom: 2rem;
-}
-table {
-  width: 100%;
-  border-collapse: collapse;
-  margin-top: 1rem;
-}
-th,
-td {
-  border: 1px solid #ddd;
-  padding: 8px;
-  text-align: left;
-  white-space: nowrap;
-}
-th[title] {
-  cursor: help;
-}
-th {
-  background-color: #f2f2f2;
-}
-tr:nth-child(even) {
-  background-color: #f9f9f9;
-}
-.loading,
-.error {
-  padding: 1rem;
-  font-size: 1.2rem;
-}
-.error {
-  color: red;
-  background-color: #ffebeb;
-  border: 1px solid red;
-  border-radius: 4px;
+/* Scoped styles can be added here if needed, but most styling comes from Vuetify */
+.v-data-table-header__icon {
+  display: none !important;
 }
 </style>
