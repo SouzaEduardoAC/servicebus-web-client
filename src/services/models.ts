@@ -1,4 +1,3 @@
-
 export interface Subscription {
   subscriptionName: string;
   topicName: string;

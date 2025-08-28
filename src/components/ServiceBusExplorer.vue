@@ -1,6 +1,18 @@
-
 <template>
   <v-container fluid>
+    <v-row>
+      <v-col cols="12">
+        <v-select
+          v-model="selectedServiceBus"
+          :items="serviceBuses"
+          item-title="name"
+          item-value="name"
+          label="Select Service Bus Instance"
+          :disabled="loading"
+          hide-details
+        ></v-select>
+      </v-col>
+    </v-row>
     <v-row>
       <v-col cols="12">
         <div class="d-flex align-center">
@@ -15,6 +27,7 @@
             clearable
             hide-details
             class="flex-grow-1"
+            :disabled="!selectedServiceBus"
           ></v-text-field>
           <v-text-field
             v-if="entityTypeFilter === 'topics'"
@@ -24,8 +37,9 @@
             clearable
             hide-details
             class="flex-grow-1 ml-4"
+            :disabled="!selectedServiceBus"
           ></v-text-field>
-          <v-btn color="primary" @click="createDialog = true" class="ml-4">
+          <v-btn color="primary" @click="openCreateDialog" class="ml-4" :disabled="!selectedServiceBus">
             Create New
           </v-btn>
         </div>
@@ -45,7 +59,7 @@
             :loading="loading"
             v-model:page="currentPage"
             v-model:items-per-page="pageSize"
-            @update:options="loadData"
+            @update:options="fetchData"
             class="elevation-1"
           >
             <template v-slot:item.sizeInBytes="{ item }">
@@ -92,7 +106,7 @@
             :loading="loading"
             v-model:page="currentPage"
             v-model:items-per-page="pageSize"
-            @update:options="loadData"
+            @update:options="fetchData"
             class="elevation-1"
           >
             <template v-slot:item.actions="{ item }">
@@ -129,22 +143,66 @@
         </v-card>
       </v-col>
     </v-row>
-    <CreateEntityDialog
-      :open="createDialog"
-      @update:open="createDialog = $event"
-      @close="createDialog = false"
-      @created="handleEntityCreated"
-    />
+
+    <v-dialog v-model="createDialog" persistent max-width="600px">
+      <v-card>
+        <v-card-title>
+          <span class="text-h5">Create New Entity</span>
+        </v-card-title>
+        <v-card-text>
+          <v-container>
+            <v-radio-group v-model="newEntity.type" inline @update:modelValue="newEntity.name = ''; newEntity.subscriptionName = ''">
+              <v-radio label="Queue" value="queue"></v-radio>
+              <v-radio label="Topic" value="topic"></v-radio>
+              <v-radio label="Subscription" value="subscription"></v-radio>
+            </v-radio-group>
+            <v-text-field
+              v-model="newEntity.name"
+              :label="getNewEntityNameLabel()"
+              required
+              class="mt-2"
+            />
+            <v-text-field
+              v-if="newEntity.type === 'subscription'"
+              v-model="newEntity.subscriptionName"
+              label="New Subscription Name*"
+              required
+            ></v-text-field>
+          </v-container>
+          <small>*indicates required field</small>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn color="blue-darken-1" text @click="closeCreateDialog" :disabled="creating">Cancel</v-btn>
+          <v-btn color="blue-darken-1" text @click="handleCreateEntity" :loading="creating" :disabled="creating">
+            Create
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-container>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
-import type { Queue, Subscription } from '../services/models';
-import * as api from '../services/api';
-import CreateEntityDialog from './CreateEntityDialog.vue';
+import { ref, onMounted, watch } from 'vue';
+import type { Queue, Subscription } from '@/services/models';
+import {
+  getServiceBuses,
+  fetchData as apiFetchData,
+  createEntity,
+  purgeActive as apiPurgeActive,
+  purgeDlq as apiPurgeDlq,
+  toggleSubscriptionStatus as apiToggleSubscriptionStatus,
+  deleteSubscription as apiDeleteSubscription,
+  purgeQueueActive as apiPurgeQueueActive,
+  purgeQueueDlq as apiPurgeQueueDlq,
+  toggleQueueStatus as apiToggleQueueStatus,
+  deleteQueue as apiDeleteQueue,
+} from '@/services/api';
 
 // Refs
+const serviceBuses = ref<{name: string}[]>([]);
+const selectedServiceBus = ref<string | null>(null);
 const queues = ref<Queue[]>([]);
 const totalQueues = ref(0);
 const subscriptions = ref<(Subscription & { topicName: string })[]>([]);
@@ -155,9 +213,15 @@ const entityTypeFilter = ref<'topics' | 'queues'>('topics');
 const nameFilter = ref('');
 const subscriptionNameFilter = ref('');
 const currentPage = ref(1);
-const pageSize = ref(10);
+const pageSize = ref(10); // Default items per page
 const sortBy = ref<any[]>([]);
 const createDialog = ref(false);
+const creating = ref(false);
+const newEntity = ref({
+  type: 'queue',
+  name: '',
+  subscriptionName: ''
+});
 
 // Headers
 const queueHeaders: any = [
@@ -182,16 +246,29 @@ const subscriptionHeaders: any = [
 ];
 
 // Methods
-async function loadData({ page, itemsPerPage, sortBy: newSortBy }: { page: number, itemsPerPage: number, sortBy: any[] }) {
+async function fetchData({ page, itemsPerPage, sortBy: newSortBy }: { page: number, itemsPerPage: number, sortBy: any[] }) {
+  if (!selectedServiceBus.value) {
+    return;
+  }
+
   try {
     loading.value = true;
     error.value = null;
 
+    // Update local pagination refs
     currentPage.value = page;
     pageSize.value = itemsPerPage;
     sortBy.value = newSortBy;
 
-    const data = await api.fetchData(entityTypeFilter.value, currentPage.value, pageSize.value, nameFilter.value, subscriptionNameFilter.value, sortBy.value);
+    const data = await apiFetchData(
+      selectedServiceBus.value,
+      entityTypeFilter.value,
+      page,
+      itemsPerPage,
+      nameFilter.value,
+      subscriptionNameFilter.value,
+      sortBy.value
+    );
 
     if (entityTypeFilter.value === 'queues') {
       queues.value = data.items;
@@ -209,109 +286,188 @@ async function loadData({ page, itemsPerPage, sortBy: newSortBy }: { page: numbe
   }
 }
 
-watch([entityTypeFilter, nameFilter, subscriptionNameFilter], () => {
-  currentPage.value = 1;
-  loadData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+onMounted(async () => {
+  try {
+    const buses = await getServiceBuses();
+    serviceBuses.value = buses;
+    if (buses.length > 0) {
+      selectedServiceBus.value = buses[0].name;
+    }
+  } catch (e: any) {
+    error.value = `Failed to fetch service bus list: ${e.message}`;
+  }
 });
 
-function handleEntityCreated(entityType: string) {
-  if (entityType === 'queue') {
-    entityTypeFilter.value = 'queues';
-  } else {
-    entityTypeFilter.value = 'topics';
-  }
-  loadData({ page: 1, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+watch([selectedServiceBus, entityTypeFilter, nameFilter, subscriptionNameFilter], () => {
+  if (!selectedServiceBus.value) return;
+  currentPage.value = 1;
+  // Manually trigger fetchData as options won't have changed if only filters are modified
+  fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+});
+
+function openCreateDialog() {
+  createDialog.value = true;
 }
 
-async function performAction(action: Promise<any>, successMessage: string, errorMessage: string) {
+function closeCreateDialog() {
+  createDialog.value = false;
+  // Reset form after a short delay to allow dialog to close gracefully
+  setTimeout(() => {
+    newEntity.value = {
+      type: 'queue',
+      name: '',
+      subscriptionName: ''
+    };
+  }, 300);
+}
+
+async function handleCreateEntity() {
+  creating.value = true;
+  error.value = null;
+  if (!selectedServiceBus.value) {
+    alert('Please select a Service Bus instance first.');
+    creating.value = false;
+    return;
+  }
   try {
-    const result = await action;
-    alert(result.message || successMessage);
-    loadData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+    const result = await createEntity(
+      selectedServiceBus.value,
+      newEntity.value.type,
+      newEntity.value.name,
+      newEntity.value.subscriptionName
+    );
+
+    alert(result.message); // Success message
+    closeCreateDialog();
+    // Refresh data and go to the relevant view
+    if (newEntity.value.type === 'queue') {
+      entityTypeFilter.value = 'queues';
+    } else {
+      entityTypeFilter.value = 'topics';
+    }
+    fetchData({ page: 1, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+
   } catch (e: any) {
-    error.value = `${errorMessage}: ${e.message}`;
+    alert(`Creation failed: ${e.message}`);
+  } finally {
+    creating.value = false;
   }
 }
 
+function getNewEntityNameLabel() {
+  switch(newEntity.value.type) {
+    case 'queue': return 'New Queue Name*';
+    case 'topic': return 'New Topic Name*';
+    case 'subscription': return 'Existing Topic Name*';
+    default: return 'Name*';
+  }
+}
+
+// Action Methods (with confirmation dialogs)
 async function purgeActive(sub: Subscription) {
+  if (!selectedServiceBus.value) return;
   if (!confirm(`Are you sure you want to purge active messages from ${sub.topicName}/${sub.subscriptionName}? This may take a while and cannot be undone.`)) return;
-  await performAction(
-    api.purgeActive(sub),
-    'Successfully purged active messages.',
-    'Failed to purge active messages'
-  );
+   try {
+    const result = await apiPurgeActive(selectedServiceBus.value, sub);
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to purge active messages: ${e.message}`;
+  }
 }
 
 async function purgeDlq(sub: Subscription) {
+  if (!selectedServiceBus.value) return;
   if (!confirm(`Are you sure you want to purge dead-letter messages from ${sub.topicName}/${sub.subscriptionName}? This may take a while and cannot be undone.`)) return;
-  await performAction(
-    api.purgeDlq(sub),
-    'Successfully purged dead-letter messages.',
-    'Failed to purge DLQ messages'
-  );
+  try {
+    const result = await apiPurgeDlq(selectedServiceBus.value, sub);
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to purge DLQ messages: ${e.message}`;
+  }
 }
 
 async function toggleSubscriptionStatus(sub: Subscription) {
+  if (!selectedServiceBus.value) return;
   const newStatus = sub.status === 'Active' ? 'Disabled' : 'Active';
   const action = newStatus === 'Disabled' ? 'disable' : 'enable';
   if (!confirm(`Are you sure you want to ${action} subscription ${sub.topicName}/${sub.subscriptionName}?`)) return;
-  await performAction(
-    api.toggleSubscriptionStatus(sub),
-    `Successfully ${action}d subscription.`,
-    `Failed to ${action} subscription`
-  );
+  try {
+    const result = await apiToggleSubscriptionStatus(selectedServiceBus.value, sub);
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to ${action} subscription: ${e.message}`;
+  }
 }
 
 async function deleteSubscription(sub: Subscription) {
+  if (!selectedServiceBus.value) return;
   if (!confirm(`Are you sure you want to DELETE subscription ${sub.topicName}/${sub.subscriptionName}? This action cannot be undone.`)) return;
-  await performAction(
-    api.deleteSubscription(sub),
-    'Successfully deleted subscription.',
-    'Failed to delete subscription'
-  );
+  try {
+    const result = await apiDeleteSubscription(selectedServiceBus.value, sub);
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to delete subscription: ${e.message}`;
+  }
 }
 
 async function purgeQueueActive(queue: Queue) {
+  if (!selectedServiceBus.value) return;
   if (!confirm(`Are you sure you want to purge active messages from queue ${queue.name}? This may take a while and cannot be undone.`)) return;
-  await performAction(
-    api.purgeQueueActive(queue),
-    'Successfully purged active messages.',
-    'Failed to purge active messages'
-  );
+  try {
+    const result = await apiPurgeQueueActive(selectedServiceBus.value, queue);
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to purge active messages: ${e.message}`;
+  }
 }
 
 async function purgeQueueDlq(queue: Queue) {
+  if (!selectedServiceBus.value) return;
   if (!confirm(`Are you sure you want to purge dead-letter messages from queue ${queue.name}? This may take a while and cannot be undone.`)) return;
-  await performAction(
-    api.purgeQueueDlq(queue),
-    'Successfully purged dead-letter messages.',
-    'Failed to purge DLQ messages'
-  );
+  try {
+    const result = await apiPurgeQueueDlq(selectedServiceBus.value, queue);
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to purge DLQ messages: ${e.message}`;
+  }
 }
 
 async function toggleQueueStatus(queue: Queue) {
+  if (!selectedServiceBus.value) return;
   const newStatus = queue.status === 'Active' ? 'Disabled' : 'Active';
   const action = newStatus === 'Disabled' ? 'disable' : 'enable';
   if (!confirm(`Are you sure you want to ${action} queue ${queue.name}?`)) return;
-  await performAction(
-    api.toggleQueueStatus(queue),
-    `Successfully ${action}d queue.`,
-    `Failed to ${action} queue`
-  );
+  try {
+    const result = await apiToggleQueueStatus(selectedServiceBus.value, queue);
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to ${action} queue: ${e.message}`;
+  }
 }
 
 async function deleteQueue(queue: Queue) {
+  if (!selectedServiceBus.value) return;
   if (!confirm(`Are you sure you want to DELETE queue ${queue.name}? This action cannot be undone.`)) return;
-  await performAction(
-    api.deleteQueue(queue),
-    'Successfully deleted queue.',
-    'Failed to delete queue'
-  );
+  try {
+    const result = await apiDeleteQueue(selectedServiceBus.value, queue);
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to delete queue: ${e.message}`;
+  }
 }
 
 </script>
 
 <style scoped>
+/* Scoped styles can be added here if needed, but most styling comes from Vuetify */
 .v-data-table-header__icon {
   display: none !important;
 }

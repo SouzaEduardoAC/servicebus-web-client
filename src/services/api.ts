@@ -1,12 +1,13 @@
 
 import type { Queue, Subscription } from './models';
 
-export async function fetchData(entityTypeFilter: 'topics' | 'queues', currentPage: number, pageSize: number, nameFilter: string, subscriptionNameFilter: string, sortBy: any[]) {
+export async function fetchData(serviceBusName: string, entityTypeFilter: 'topics' | 'queues', currentPage: number, pageSize: number, nameFilter: string, subscriptionNameFilter: string, sortBy: any[]) {
     const skip = (currentPage - 1) * pageSize;
     const params = new URLSearchParams({
       skip: skip.toString(),
       top: pageSize.toString(),
       nameFilter: nameFilter,
+      serviceBusName,
     });
 
     if (entityTypeFilter === 'topics' && subscriptionNameFilter) {
@@ -29,7 +30,7 @@ export async function fetchData(entityTypeFilter: 'topics' | 'queues', currentPa
     return await response.json();
 }
 
-export async function createEntity(entityType: string, name: string, subscriptionName?: string) {
+export async function createEntity(serviceBusName: string, entityType: string, name: string, subscriptionName?: string) {
     let endpoint = '';
     let body = {};
     let validationError = '';
@@ -56,7 +57,7 @@ export async function createEntity(entityType: string, name: string, subscriptio
       throw new Error(validationError);
     }
 
-    const response = await fetch(endpoint, {
+    const response = await fetch(`${endpoint}?serviceBusName=${serviceBusName}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -70,8 +71,8 @@ export async function createEntity(entityType: string, name: string, subscriptio
     return result;
 }
 
-async function serviceBusAction(endpoint: string, body: object) {
-  const response = await fetch(endpoint, {
+async function serviceBusAction(serviceBusName: string, endpoint: string, body: object) {
+  const response = await fetch(`${endpoint}?serviceBusName=${serviceBusName}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -83,21 +84,21 @@ async function serviceBusAction(endpoint: string, body: object) {
   return await response.json();
 }
 
-export async function purgeActive(sub: Subscription) {
-  return serviceBusAction('/api/subscriptions/purge-active', { topicName: sub.topicName, subscriptionName: sub.subscriptionName });
+export async function purgeActive(serviceBusName: string, sub: Subscription) {
+  return serviceBusAction(serviceBusName, '/api/subscriptions/purge-active', { topicName: sub.topicName, subscriptionName: sub.subscriptionName });
 }
 
-export async function purgeDlq(sub: Subscription) {
-  return serviceBusAction('/api/subscriptions/purge-dlq', { topicName: sub.topicName, subscriptionName: sub.subscriptionName });
+export async function purgeDlq(serviceBusName: string, sub: Subscription) {
+  return serviceBusAction(serviceBusName, '/api/subscriptions/purge-dlq', { topicName: sub.topicName, subscriptionName: sub.subscriptionName });
 }
 
-export async function toggleSubscriptionStatus(sub: Subscription) {
+export async function toggleSubscriptionStatus(serviceBusName: string, sub: Subscription) {
   const newStatus = sub.status === 'Active' ? 'Disabled' : 'Active';
-  return serviceBusAction('/api/subscriptions/status', { topicName: sub.topicName, subscriptionName: sub.subscriptionName, status: newStatus });
+  return serviceBusAction(serviceBusName, '/api/subscriptions/status', { topicName: sub.topicName, subscriptionName: sub.subscriptionName, status: newStatus });
 }
 
-export async function deleteSubscription(sub: Subscription) {
-  const response = await fetch('/api/subscriptions/delete', {
+export async function deleteSubscription(serviceBusName: string, sub: Subscription) {
+  const response = await fetch(`/api/subscriptions/delete?serviceBusName=${serviceBusName}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ topicName: sub.topicName, subscriptionName: sub.subscriptionName })
@@ -109,21 +110,21 @@ export async function deleteSubscription(sub: Subscription) {
   return await response.json();
 }
 
-export async function purgeQueueActive(queue: Queue) {
-  return serviceBusAction('/api/queues/purge-active', { queueName: queue.name });
+export async function purgeQueueActive(serviceBusName: string, queue: Queue) {
+  return serviceBusAction(serviceBusName, '/api/queues/purge-active', { queueName: queue.name });
 }
 
-export async function purgeQueueDlq(queue: Queue) {
-  return serviceBusAction('/api/queues/purge-dlq', { queueName: queue.name });
+export async function purgeQueueDlq(serviceBusName: string, queue: Queue) {
+  return serviceBusAction(serviceBusName, '/api/queues/purge-dlq', { queueName: queue.name });
 }
 
-export async function toggleQueueStatus(queue: Queue) {
+export async function toggleQueueStatus(serviceBusName: string, queue: Queue) {
   const newStatus = queue.status === 'Active' ? 'Disabled' : 'Active';
-  return serviceBusAction('/api/queues/status', { queueName: queue.name, status: newStatus });
+  return serviceBusAction(serviceBusName, '/api/queues/status', { queueName: queue.name, status: newStatus });
 }
 
-export async function deleteQueue(queue: Queue) {
-  const response = await fetch('/api/queues/delete', {
+export async function deleteQueue(serviceBusName: string, queue: Queue) {
+  const response = await fetch(`/api/queues/delete?serviceBusName=${serviceBusName}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ queueName: queue.name })
@@ -133,4 +134,13 @@ export async function deleteQueue(queue: Queue) {
       throw new Error(errorData.message || 'Failed to delete queue');
   }
   return await response.json();
+}
+
+export async function getServiceBuses() {
+    const response = await fetch('/api/servicebuses');
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
 }

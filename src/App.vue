@@ -4,7 +4,7 @@
       <v-app-bar-title>Azure Service Bus Explorer</v-app-bar-title>
     </v-app-bar>
     <v-main>
-      <v-container>
+      <v-container fluid>
         <ServiceBusExplorer />
       </v-container>
     </v-main>
