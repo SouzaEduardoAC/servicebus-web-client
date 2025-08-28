@@ -24,6 +24,9 @@
             hide-details
             class="flex-grow-1 ml-4"
           ></v-text-field>
+          <v-btn color="primary" @click="openCreateDialog" class="ml-4">
+            Create New
+          </v-btn>
         </div>
       </v-col>
     </v-row>
@@ -46,6 +49,35 @@
           >
             <template v-slot:item.sizeInBytes="{ item }">
               {{ (item.sizeInBytes / 1024 / 1024).toFixed(3) }} MB
+            </template>
+            <template v-slot:item.actions="{ item }">
+              <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props" icon="mdi-fire" size="small" @click="purgeQueueActive(item)" :disabled="item.activeMessageCount === 0" class="mr-2">
+                  </v-btn>
+                </template>
+                <span>Purge Active Messages</span>
+              </v-tooltip>
+              <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props" icon="mdi-delete-sweep" size="small" @click="purgeQueueDlq(item)" :disabled="item.deadLetterMessageCount === 0" class="mr-2">
+                  </v-btn>
+                </template>
+                <span>Purge Dead-lettered Messages</span>
+              </v-tooltip>
+              <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props" :icon="item.status === 'Active' ? 'mdi-pause-circle' : 'mdi-play-circle'" size="small" @click="toggleQueueStatus(item)" class="mr-2">
+                  </v-btn>
+                </template>
+                <span>{{ item.status === 'Active' ? 'Disable Queue' : 'Enable Queue' }}</span>
+              </v-tooltip>
+              <v-tooltip location="top">
+                <template v-slot:activator="{ props }">
+                  <v-btn v-bind="props" icon="mdi-delete-forever" size="small" color="error" @click="deleteQueue(item)"></v-btn>
+                </template>
+                <span>Delete Queue</span>
+              </v-tooltip>
             </template>
           </v-data-table-server>
         </v-card>
@@ -96,6 +128,43 @@
         </v-card>
       </v-col>
     </v-row>
+
+    <v-dialog v-model="createDialog" persistent max-width="600px">
+      <v-card>
+        <v-card-title>
+          <span class="text-h5">Create New Entity</span>
+        </v-card-title>
+        <v-card-text>
+          <v-container>
+            <v-radio-group v-model="newEntity.type" inline @update:modelValue="newEntity.name = ''; newEntity.subscriptionName = ''">
+              <v-radio label="Queue" value="queue"></v-radio>
+              <v-radio label="Topic" value="topic"></v-radio>
+              <v-radio label="Subscription" value="subscription"></v-radio>
+            </v-radio-group>
+            <v-text-field
+              v-model="newEntity.name"
+              :label="getNewEntityNameLabel()"
+              required
+              class="mt-2"
+            />
+            <v-text-field
+              v-if="newEntity.type === 'subscription'"
+              v-model="newEntity.subscriptionName"
+              label="New Subscription Name*"
+              required
+            ></v-text-field>
+          </v-container>
+          <small>*indicates required field</small>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer></v-spacer>
+          <v-btn color="blue-darken-1" text @click="closeCreateDialog" :disabled="creating">Cancel</v-btn>
+          <v-btn color="blue-darken-1" text @click="handleCreateEntity" :loading="creating" :disabled="creating">
+            Create
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-container>
 </template>
 
@@ -137,6 +206,13 @@ const subscriptionNameFilter = ref('');
 const currentPage = ref(1);
 const pageSize = ref(10); // Default items per page
 const sortBy = ref<any[]>([]);
+const createDialog = ref(false);
+const creating = ref(false);
+const newEntity = ref({
+  type: 'queue',
+  name: '',
+  subscriptionName: ''
+});
 
 // Headers
 const queueHeaders: any = [
@@ -148,6 +224,7 @@ const queueHeaders: any = [
   { title: 'Transfer', key: 'transferMessageCount', sortable: true },
   { title: 'Transfer DLQ', key: 'transferDeadLetterMessageCount', sortable: true },
   { title: 'Size', key: 'sizeInBytes', sortable: true },
+  { title: 'Actions', key: 'actions', sortable: false, align: 'end'  },
 ];
 
 const subscriptionHeaders: any = [
@@ -217,6 +294,90 @@ watch([entityTypeFilter, nameFilter, subscriptionNameFilter], () => {
   // Manually trigger fetchData as options won't have changed if only filters are modified
   fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
 });
+
+function openCreateDialog() {
+  createDialog.value = true;
+}
+
+function closeCreateDialog() {
+  createDialog.value = false;
+  // Reset form after a short delay to allow dialog to close gracefully
+  setTimeout(() => {
+    newEntity.value = {
+      type: 'queue',
+      name: '',
+      subscriptionName: ''
+    };
+  }, 300);
+}
+
+async function handleCreateEntity() {
+  creating.value = true;
+  error.value = null;
+  try {
+    let endpoint = '';
+    let body = {};
+    let validationError = '';
+
+    if (newEntity.value.type === 'queue') {
+      if (!newEntity.value.name) validationError = 'Queue name is required.';
+      endpoint = '/api/queues';
+      body = { name: newEntity.value.name };
+    } else if (newEntity.value.type === 'topic') {
+      if (!newEntity.value.name) validationError = 'Topic name is required.';
+      endpoint = '/api/topics';
+      body = { name: newEntity.value.name };
+    } else { // subscription
+      if (!newEntity.value.name) validationError = 'Topic name is required.';
+      else if (!newEntity.value.subscriptionName) validationError = 'Subscription name is required.';
+      endpoint = '/api/subscriptions';
+      body = {
+        topicName: newEntity.value.name,
+        subscriptionName: newEntity.value.subscriptionName
+      };
+    }
+
+    if (validationError) {
+      alert(validationError);
+      return;
+    }
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      throw new Error(result.message || 'Failed to create entity.');
+    }
+
+    alert(result.message); // Success message
+    closeCreateDialog();
+    // Refresh data and go to the relevant view
+    if (newEntity.value.type === 'queue') {
+      entityTypeFilter.value = 'queues';
+    } else {
+      entityTypeFilter.value = 'topics';
+    }
+    fetchData({ page: 1, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+
+  } catch (e: any) {
+    alert(`Creation failed: ${e.message}`);
+  } finally {
+    creating.value = false;
+  }
+}
+
+function getNewEntityNameLabel() {
+  switch(newEntity.value.type) {
+    case 'queue': return 'New Queue Name*';
+    case 'topic': return 'New Topic Name*';
+    case 'subscription': return 'Existing Topic Name*';
+    default: return 'Name*';
+  }
+}
 
 // Action Methods (with confirmation dialogs)
 async function purgeActive(sub: Subscription) {
@@ -302,6 +463,88 @@ async function deleteSubscription(sub: Subscription) {
     fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
   } catch (e: any) {
     error.value = `Failed to delete subscription: ${e.message}`;
+  }
+}
+
+async function purgeQueueActive(queue: Queue) {
+  if (!confirm(`Are you sure you want to purge active messages from queue ${queue.name}? This may take a while and cannot be undone.`)) return;
+  try {
+    const response = await fetch('/api/queues/purge-active', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queueName: queue.name })
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || 'Failed to purge active messages');
+    }
+    const result = await response.json();
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to purge active messages: ${e.message}`;
+  }
+}
+
+async function purgeQueueDlq(queue: Queue) {
+  if (!confirm(`Are you sure you want to purge dead-letter messages from queue ${queue.name}? This may take a while and cannot be undone.`)) return;
+  try {
+    const response = await fetch('/api/queues/purge-dlq', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queueName: queue.name })
+    });
+    if (!response.ok) {
+       const errorData = await response.json();
+      throw new Error(errorData.message || 'Failed to purge DLQ messages');
+    }
+    const result = await response.json();
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to purge DLQ messages: ${e.message}`;
+  }
+}
+
+async function toggleQueueStatus(queue: Queue) {
+  const newStatus = queue.status === 'Active' ? 'Disabled' : 'Active';
+  const action = newStatus === 'Disabled' ? 'disable' : 'enable';
+  if (!confirm(`Are you sure you want to ${action} queue ${queue.name}?`)) return;
+  try {
+    const response = await fetch(`/api/queues/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queueName: queue.name, status: newStatus })
+    });
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to ${action} queue`);
+    }
+    const result = await response.json();
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to ${action} queue: ${e.message}`;
+  }
+}
+
+async function deleteQueue(queue: Queue) {
+  if (!confirm(`Are you sure you want to DELETE queue ${queue.name}? This action cannot be undone.`)) return;
+  try {
+    const response = await fetch('/api/queues/delete', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queueName: queue.name })
+    });
+    if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Failed to delete queue');
+    }
+    const result = await response.json();
+    alert(result.message);
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
+  } catch (e: any) {
+    error.value = `Failed to delete queue: ${e.message}`;
   }
 }
 

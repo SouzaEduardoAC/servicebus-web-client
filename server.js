@@ -142,6 +142,53 @@ app.get('/api/subscriptions', async (req, res) => {
   }
 });
 
+app.post('/api/topics', async (req, res) => {
+  const { name } = req.body;
+  console.log(`Creating topic: ${name}`);
+  if (!name) {
+    return res.status(400).json({ error: 'Topic name is required.' });
+  }
+  try {
+    await adminClient.createTopic(name);
+    res.status(201).json({ message: `Topic '${name}' created successfully.` });
+  } catch (err) {
+    console.error(`Error creating topic:`, err);
+    res.status(500).json({ error: 'Failed to create topic.', message: err.message });
+  }
+});
+
+app.post('/api/queues', async (req, res) => {
+  const { name } = req.body;
+  console.log(`Creating queue: ${name}`);
+  if (!name) {
+    return res.status(400).json({ error: 'Queue name is required.' });
+  }
+  try {
+    await adminClient.createQueue(name);
+    res.status(201).json({ message: `Queue '${name}' created successfully.` });
+  } catch (err) {
+    console.error(`Error creating queue:`, err);
+    res.status(500).json({ error: 'Failed to create queue.', message: err.message });
+  }
+});
+
+app.post('/api/subscriptions', async (req, res) => {
+  const { topicName, subscriptionName } = req.body;
+  console.log(`Creating subscription '${subscriptionName}' for topic '${topicName}'`);
+  if (!topicName || !subscriptionName) {
+    return res.status(400).json({ error: 'Topic name and subscription name are required.' });
+  }
+  try {
+    // Check if topic exists first to provide a better error message
+    await adminClient.getTopic(topicName);
+    await adminClient.createSubscription(topicName, subscriptionName);
+    res.status(201).json({ message: `Subscription '${subscriptionName}' created successfully for topic '${topicName}'.` });
+  } catch (err) {
+    console.error(`Error creating subscription:`, err);
+    res.status(500).json({ error: 'Failed to create subscription.', message: err.message });
+  }
+});
+
 app.post('/api/subscriptions/purge-active', async (req, res) => {
   const { topicName, subscriptionName } = req.body;
   console.log(`Purging active messages for ${topicName}/${subscriptionName}`);
@@ -191,6 +238,86 @@ app.post('/api/subscriptions/purge-dlq', async (req, res) => {
   } catch (err) {
     console.error('Error purging DLQ messages:', err);
     res.status(500).json({ error: 'Failed to purge DLQ messages.', message: err.message });
+  }
+});
+
+app.post('/api/queues/purge-active', async (req, res) => {
+  const { queueName } = req.body;
+  console.log(`Purging active messages for queue ${queueName}`);
+  try {
+    const receiver = sbClient.createReceiver(queueName, {
+      receiveMode: 'receiveAndDelete',
+    });
+    let count = 0;
+    while (true) {
+      const messages = await receiver.receiveMessages(100, { maxWaitTimeInMs: 2000 });
+      if (messages.length === 0) {
+        break;
+      }
+      count += messages.length;
+      console.log(`Purged ${messages.length} messages...`);
+    }
+    await receiver.close();
+    console.log(`Total purged active messages: ${count}`);
+    res.json({ message: `Successfully purged ${count} active messages.` });
+  } catch (err) {
+    console.error('Error purging active messages from queue:', err);
+    res.status(500).json({ error: 'Failed to purge active messages.', message: err.message });
+  }
+});
+
+app.post('/api/queues/purge-dlq', async (req, res) => {
+  const { queueName } = req.body;
+  console.log(`Purging DLQ messages for queue ${queueName}`);
+  try {
+    const receiver = sbClient.createReceiver(queueName, {
+      subQueueType: 'deadLetter',
+      receiveMode: 'receiveAndDelete',
+    });
+    let count = 0;
+    while (true) {
+      const messages = await receiver.receiveMessages(100, { maxWaitTimeInMs: 2000 });
+      if (messages.length === 0) {
+        break;
+      }
+      count += messages.length;
+      console.log(`Purged ${messages.length} DLQ messages...`);
+    }
+    await receiver.close();
+    console.log(`Total purged DLQ messages: ${count}`);
+    res.json({ message: `Successfully purged ${count} DLQ messages.` });
+  } catch (err) {
+    console.error('Error purging DLQ messages from queue:', err);
+    res.status(500).json({ error: 'Failed to purge DLQ messages.', message: err.message });
+  }
+});
+
+app.post('/api/queues/status', async (req, res) => {
+  const { queueName, status } = req.body;
+  if (status !== 'Active' && status !== 'Disabled') {
+    return res.status(400).json({ error: 'Invalid status.' });
+  }
+  console.log(`Setting status to ${status} for queue ${queueName}`);
+  try {
+    const queue = await adminClient.getQueue(queueName);
+    queue.status = status;
+    await adminClient.updateQueue(queue);
+    res.json({ message: `Queue status updated to ${status}.` });
+  } catch (err) {
+    console.error(`Error updating queue status:`, err);
+    res.status(500).json({ error: 'Failed to update queue status.', message: err.message });
+  }
+});
+
+app.delete('/api/queues/delete', async (req, res) => {
+  const { queueName } = req.body;
+  console.log(`Deleting queue ${queueName}`);
+  try {
+    await adminClient.deleteQueue(queueName);
+    res.json({ message: 'Queue deleted successfully.' });
+  } catch (err) {
+    console.error('Error deleting queue:', err);
+    res.status(500).json({ error: 'Failed to delete queue.', message: err.message });
   }
 });
 
