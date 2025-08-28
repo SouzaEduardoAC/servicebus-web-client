@@ -130,15 +130,7 @@ app.get('/api/subscriptions', async (req, res) => {
           subInfo.topicName,
           subInfo.subscriptionName
         );
-        return {
-          topicName: subInfo.topicName,
-          subscriptionName: subInfo.subscriptionName,
-          status: subRuntimeProps.status,
-          activeMessageCount: subRuntimeProps.activeMessageCount,
-          deadLetterMessageCount: subRuntimeProps.deadLetterMessageCount,
-          transferMessageCount: subRuntimeProps.transferMessageCount,
-          transferDeadLetterMessageCount: subRuntimeProps.transferDeadLetterMessageCount,
-        };
+        return { ...subInfo, ...subRuntimeProps };
       })
     );
 
