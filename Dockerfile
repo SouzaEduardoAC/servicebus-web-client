@@ -23,8 +23,8 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm install --production
 
-COPY server.js .
+COPY src/server ./src/server
 COPY --from=builder /app/dist ./dist
 
 EXPOSE 3001
-CMD ["node", "server.js"]
+CMD ["node", "src/server/index.js"]
