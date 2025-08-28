@@ -9,11 +9,20 @@
           </v-radio-group>
           <v-text-field
             v-model="nameFilter"
-            label="Filter by name..."
+            :label="entityTypeFilter === 'topics' ? 'Filter by topic name...' : 'Filter by queue name...'"
             dense
             clearable
             hide-details
             class="flex-grow-1"
+          ></v-text-field>
+          <v-text-field
+            v-if="entityTypeFilter === 'topics'"
+            v-model="subscriptionNameFilter"
+            label="Filter by subscription name..."
+            dense
+            clearable
+            hide-details
+            class="flex-grow-1 ml-4"
           ></v-text-field>
         </div>
       </v-col>
@@ -124,8 +133,10 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 const entityTypeFilter = ref<'topics' | 'queues'>('topics');
 const nameFilter = ref('');
+const subscriptionNameFilter = ref('');
 const currentPage = ref(1);
 const pageSize = ref(10); // Default items per page
+const sortBy = ref<any[]>([]);
 
 // Headers
 const queueHeaders: any = [
@@ -149,7 +160,7 @@ const subscriptionHeaders: any = [
 ];
 
 // Methods
-async function fetchData({ page, itemsPerPage, sortBy }: { page: any, itemsPerPage: any, sortBy: any }) {
+async function fetchData({ page, itemsPerPage, sortBy: newSortBy }: { page: number, itemsPerPage: number, sortBy: any[] }) {
   try {
     loading.value = true;
     error.value = null;
@@ -157,6 +168,7 @@ async function fetchData({ page, itemsPerPage, sortBy }: { page: any, itemsPerPa
     // Update local pagination refs
     currentPage.value = page;
     pageSize.value = itemsPerPage;
+    sortBy.value = newSortBy;
 
     const skip = (page - 1) * itemsPerPage;
     const params = new URLSearchParams({
@@ -165,9 +177,13 @@ async function fetchData({ page, itemsPerPage, sortBy }: { page: any, itemsPerPa
       nameFilter: nameFilter.value,
     });
 
-    if (sortBy && sortBy.length > 0) {
-      params.append('orderBy', sortBy[0].key);
-      params.append('order', sortBy[0].order === 'desc' ? 'DESC' : 'ASC');
+    if (entityTypeFilter.value === 'topics' && subscriptionNameFilter.value) {
+      params.append('subscriptionNameFilter', subscriptionNameFilter.value);
+    }
+
+    if (newSortBy && newSortBy.length > 0) {
+      params.append('orderBy', newSortBy[0].key);
+      params.append('order', newSortBy[0].order);
     }
 
     const endpoint = entityTypeFilter.value === 'queues' ? '/api/queues' : '/api/subscriptions';
@@ -196,14 +212,10 @@ async function fetchData({ page, itemsPerPage, sortBy }: { page: any, itemsPerPa
   }
 }
 
-watch([entityTypeFilter, nameFilter], () => {
+watch([entityTypeFilter, nameFilter, subscriptionNameFilter], () => {
   currentPage.value = 1;
   // Manually trigger fetchData as options won't have changed if only filters are modified
-  fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
-});
-
-onMounted(() => {
-  fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
+  fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
 });
 
 // Action Methods (with confirmation dialogs)
@@ -222,7 +234,7 @@ async function purgeActive(sub: Subscription) {
     }
     const result = await response.json();
     alert(result.message);
-    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
   } catch (e: any) {
     error.value = `Failed to purge active messages: ${e.message}`;
   }
@@ -243,7 +255,7 @@ async function purgeDlq(sub: Subscription) {
     }
     const result = await response.json();
     alert(result.message);
-    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
   } catch (e: any) {
     error.value = `Failed to purge DLQ messages: ${e.message}`;
   }
@@ -266,7 +278,7 @@ async function toggleSubscriptionStatus(sub: Subscription) {
     }
     const result = await response.json();
     alert(result.message);
-    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
   } catch (e: any) {
     error.value = `Failed to ${action} subscription: ${e.message}`;
   }
@@ -287,7 +299,7 @@ async function deleteSubscription(sub: Subscription) {
     }
     const result = await response.json();
     alert(result.message);
-    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: [] });
+    fetchData({ page: currentPage.value, itemsPerPage: pageSize.value, sortBy: sortBy.value });
   } catch (e: any) {
     error.value = `Failed to delete subscription: ${e.message}`;
   }

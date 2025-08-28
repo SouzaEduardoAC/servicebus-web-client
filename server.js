@@ -34,6 +34,7 @@ app.get('/api/queues', async (req, res) => {
     const skip = parseInt(req.query.skip, 10) || 0;
     const top = parseInt(req.query.top, 10) || 25;
     const nameFilter = (req.query.nameFilter || '').toLowerCase();
+    const { orderBy, order } = req.query;
 
     let allQueueProps = [];
     const queueIterator = adminClient.listQueues();
@@ -43,6 +44,21 @@ app.get('/api/queues', async (req, res) => {
 
     if (nameFilter) {
       allQueueProps = allQueueProps.filter((q) => q.name.toLowerCase().includes(nameFilter));
+    }
+
+    if (orderBy && allQueueProps.length > 0) {
+      allQueueProps.sort((a, b) => {
+        const valA = a[orderBy];
+        const valB = b[orderBy];
+
+        if (typeof valA === 'string') {
+          return order === 'desc' ? valB.localeCompare(valA) : valA.localeCompare(valB);
+        }
+        // for numbers or other types
+        if (valA < valB) return order === 'desc' ? 1 : -1;
+        if (valA > valB) return order === 'desc' ? -1 : 1;
+        return 0;
+      });
     }
 
     const total = allQueueProps.length;
@@ -69,22 +85,40 @@ app.get('/api/subscriptions', async (req, res) => {
     const skip = parseInt(req.query.skip, 10) || 0;
     const top = parseInt(req.query.top, 10) || 25;
     const nameFilter = (req.query.nameFilter || '').toLowerCase();
+    const subscriptionNameFilter = (req.query.subscriptionNameFilter || '').toLowerCase();
+    const { orderBy, order } = req.query;
 
     let allSubscriptionsInfo = [];
     const topicIterator = adminClient.listTopics();
     for await (const topicProps of topicIterator) {
+      // If filtering by topic name, skip topics that don't match.
+      if (nameFilter && !topicProps.name.toLowerCase().includes(nameFilter)) {
+        continue;
+      }
+
       const subscriptionIterator = adminClient.listSubscriptions(topicProps.name);
       for await (const subProps of subscriptionIterator) {
+        // If filtering by subscription name, skip subscriptions that don't match.
+        if (subscriptionNameFilter && !subProps.subscriptionName.toLowerCase().includes(subscriptionNameFilter)) {
+          continue;
+        }
         allSubscriptionsInfo.push({ ...subProps, topicName: topicProps.name });
       }
     }
 
-    if (nameFilter) {
-      allSubscriptionsInfo = allSubscriptionsInfo.filter(
-        (s) =>
-          s.topicName.toLowerCase().includes(nameFilter) ||
-          s.subscriptionName.toLowerCase().includes(nameFilter)
-      );
+    if (orderBy && allSubscriptionsInfo.length > 0) {
+      allSubscriptionsInfo.sort((a, b) => {
+        const valA = a[orderBy];
+        const valB = b[orderBy];
+
+        if (typeof valA === 'string') {
+          return order === 'desc' ? valB.localeCompare(valA) : valA.localeCompare(valB);
+        }
+        // for numbers or other types
+        if (valA < valB) return order === 'desc' ? 1 : -1;
+        if (valA > valB) return order === 'desc' ? -1 : 1;
+        return 0;
+      });
     }
 
     const total = allSubscriptionsInfo.length;
